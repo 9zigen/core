@@ -20,9 +20,11 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_platform
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from . import TotalConnectDataUpdateCoordinator
 from .const import DOMAIN
 
 SERVICE_ALARM_ARM_AWAY_INSTANT = "arm_away_instant"
@@ -35,7 +37,7 @@ async def async_setup_entry(
     """Set up TotalConnect alarm panels based on a config entry."""
     alarms = []
 
-    coordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: TotalConnectDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
     for location_id, location in coordinator.client.locations.items():
         location_name = location.location_name
@@ -67,7 +69,9 @@ async def async_setup_entry(
     )
 
 
-class TotalConnectAlarm(CoordinatorEntity, alarm.AlarmControlPanelEntity):
+class TotalConnectAlarm(
+    CoordinatorEntity[TotalConnectDataUpdateCoordinator], alarm.AlarmControlPanelEntity
+):
     """Represent an TotalConnect status."""
 
     _attr_supported_features = (
@@ -76,7 +80,13 @@ class TotalConnectAlarm(CoordinatorEntity, alarm.AlarmControlPanelEntity):
         | AlarmControlPanelEntityFeature.ARM_NIGHT
     )
 
-    def __init__(self, coordinator, name, location_id, partition_id):
+    def __init__(
+        self,
+        coordinator: TotalConnectDataUpdateCoordinator,
+        name,
+        location_id,
+        partition_id,
+    ):
         """Initialize the TotalConnect status."""
         super().__init__(coordinator)
         self._location_id = location_id
@@ -84,8 +94,8 @@ class TotalConnectAlarm(CoordinatorEntity, alarm.AlarmControlPanelEntity):
         self._partition_id = partition_id
         self._partition = self._location.partitions[partition_id]
         self._device = self._location.devices[self._location.security_device_id]
-        self._state = None
-        self._extra_state_attributes = {}
+        self._state: str | None = None
+        self._attr_extra_state_attributes = {}
 
         """
         Set unique_id to location_id for partition 1 to avoid breaking change
@@ -93,35 +103,25 @@ class TotalConnectAlarm(CoordinatorEntity, alarm.AlarmControlPanelEntity):
         Add _# for partition 2 and beyond.
         """
         if partition_id == 1:
-            self._name = name
-            self._unique_id = f"{location_id}"
+            self._attr_name = name
+            self._attr_unique_id = f"{location_id}"
         else:
-            self._name = f"{name} partition {partition_id}"
-            self._unique_id = f"{location_id}_{partition_id}"
+            self._attr_name = f"{name} partition {partition_id}"
+            self._attr_unique_id = f"{location_id}_{partition_id}"
 
     @property
-    def name(self):
-        """Return the name of the device."""
-        return self._name
-
-    @property
-    def unique_id(self):
-        """Return the unique id."""
-        return self._unique_id
-
-    @property
-    def device_info(self):
+    def device_info(self) -> DeviceInfo:
         """Return device info."""
-        return {
-            "identifiers": {(DOMAIN, self._device.serial_number)},
-            "name": self._device.name,
-        }
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._device.serial_number)},
+            name=self._device.name,
+        )
 
     @property
-    def state(self):
+    def state(self) -> str | None:
         """Return the state of the device."""
         attr = {
-            "location_name": self._name,
+            "location_name": self.name,
             "location_id": self._location_id,
             "partition": self._partition_id,
             "ac_loss": self._location.ac_loss,
@@ -131,6 +131,7 @@ class TotalConnectAlarm(CoordinatorEntity, alarm.AlarmControlPanelEntity):
             "triggered_zone": None,
         }
 
+        state: str | None = None
         if self._partition.arming_state.is_disarmed():
             state = STATE_ALARM_DISARMED
         elif self._partition.arming_state.is_armed_night():
@@ -156,14 +157,9 @@ class TotalConnectAlarm(CoordinatorEntity, alarm.AlarmControlPanelEntity):
             attr["triggered_source"] = "Carbon Monoxide"
 
         self._state = state
-        self._extra_state_attributes = attr
+        self._attr_extra_state_attributes = attr
 
         return self._state
-
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes of the device."""
-        return self._extra_state_attributes
 
     async def async_alarm_disarm(self, code: str | None = None) -> None:
         """Send disarm command."""
@@ -176,7 +172,7 @@ class TotalConnectAlarm(CoordinatorEntity, alarm.AlarmControlPanelEntity):
             ) from error
         except BadResultCodeError as error:
             raise HomeAssistantError(
-                f"TotalConnect failed to disarm {self._name}."
+                f"TotalConnect failed to disarm {self.name}."
             ) from error
         await self.coordinator.async_request_refresh()
 
@@ -195,7 +191,7 @@ class TotalConnectAlarm(CoordinatorEntity, alarm.AlarmControlPanelEntity):
             ) from error
         except BadResultCodeError as error:
             raise HomeAssistantError(
-                f"TotalConnect failed to arm home {self._name}."
+                f"TotalConnect failed to arm home {self.name}."
             ) from error
         await self.coordinator.async_request_refresh()
 
@@ -214,7 +210,7 @@ class TotalConnectAlarm(CoordinatorEntity, alarm.AlarmControlPanelEntity):
             ) from error
         except BadResultCodeError as error:
             raise HomeAssistantError(
-                f"TotalConnect failed to arm away {self._name}."
+                f"TotalConnect failed to arm away {self.name}."
             ) from error
         await self.coordinator.async_request_refresh()
 
@@ -233,7 +229,7 @@ class TotalConnectAlarm(CoordinatorEntity, alarm.AlarmControlPanelEntity):
             ) from error
         except BadResultCodeError as error:
             raise HomeAssistantError(
-                f"TotalConnect failed to arm night {self._name}."
+                f"TotalConnect failed to arm night {self.name}."
             ) from error
         await self.coordinator.async_request_refresh()
 
@@ -252,7 +248,7 @@ class TotalConnectAlarm(CoordinatorEntity, alarm.AlarmControlPanelEntity):
             ) from error
         except BadResultCodeError as error:
             raise HomeAssistantError(
-                f"TotalConnect failed to arm home instant {self._name}."
+                f"TotalConnect failed to arm home instant {self.name}."
             ) from error
         await self.coordinator.async_request_refresh()
 
@@ -271,7 +267,7 @@ class TotalConnectAlarm(CoordinatorEntity, alarm.AlarmControlPanelEntity):
             ) from error
         except BadResultCodeError as error:
             raise HomeAssistantError(
-                f"TotalConnect failed to arm away instant {self._name}."
+                f"TotalConnect failed to arm away instant {self.name}."
             ) from error
         await self.coordinator.async_request_refresh()
 

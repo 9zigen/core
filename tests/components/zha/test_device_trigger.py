@@ -40,7 +40,7 @@ LONG_RELEASE = "remote_button_long_release"
 
 @pytest.fixture(autouse=True)
 def sensor_platforms_only():
-    """Only setup the sensor platform and required base platforms to speed up tests."""
+    """Only set up the sensor platform and required base platforms to speed up tests."""
     with patch("homeassistant.components.zha.PLATFORMS", (Platform.SENSOR,)):
         yield
 
@@ -83,7 +83,7 @@ async def mock_devices(hass, zigpy_device_mock, zha_device_joined_restored):
 
 
 async def test_triggers(hass, mock_devices):
-    """Test zha device triggers."""
+    """Test ZHA device triggers."""
 
     zigpy_device, zha_device = mock_devices
 
@@ -158,7 +158,7 @@ async def test_triggers(hass, mock_devices):
 
 
 async def test_no_triggers(hass, mock_devices):
-    """Test zha device with no triggers."""
+    """Test ZHA device with no triggers."""
 
     _, zha_device = mock_devices
     ieee_address = str(zha_device.ieee)
@@ -327,7 +327,7 @@ async def test_exception_no_triggers(hass, mock_devices, calls, caplog):
         },
     )
     await hass.async_block_till_done()
-    assert "Invalid config for [automation]" in caplog.text
+    assert "Invalid trigger configuration" in caplog.text
 
 
 async def test_exception_bad_trigger(hass, mock_devices, calls, caplog):
@@ -369,4 +369,43 @@ async def test_exception_bad_trigger(hass, mock_devices, calls, caplog):
         },
     )
     await hass.async_block_till_done()
-    assert "Invalid config for [automation]" in caplog.text
+    assert "Invalid trigger configuration" in caplog.text
+
+
+@pytest.mark.skip(reason="Temporarily disabled until automation validation is improved")
+async def test_exception_no_device(hass, mock_devices, calls, caplog):
+    """Test for exception on event triggers firing."""
+
+    zigpy_device, zha_device = mock_devices
+
+    zigpy_device.device_automation_triggers = {
+        (SHAKEN, SHAKEN): {COMMAND: COMMAND_SHAKE},
+        (DOUBLE_PRESS, DOUBLE_PRESS): {COMMAND: COMMAND_DOUBLE},
+        (SHORT_PRESS, SHORT_PRESS): {COMMAND: COMMAND_SINGLE},
+        (LONG_PRESS, LONG_PRESS): {COMMAND: COMMAND_HOLD},
+        (LONG_RELEASE, LONG_RELEASE): {COMMAND: COMMAND_HOLD},
+    }
+
+    await async_setup_component(
+        hass,
+        automation.DOMAIN,
+        {
+            automation.DOMAIN: [
+                {
+                    "trigger": {
+                        "device_id": "no_such_device_id",
+                        "domain": "zha",
+                        "platform": "device",
+                        "type": "junk",
+                        "subtype": "junk",
+                    },
+                    "action": {
+                        "service": "test.automation",
+                        "data": {"message": "service called"},
+                    },
+                }
+            ]
+        },
+    )
+    await hass.async_block_till_done()
+    assert "Invalid trigger configuration" in caplog.text

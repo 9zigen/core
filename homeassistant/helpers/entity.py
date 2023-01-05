@@ -38,7 +38,7 @@ from homeassistant.exceptions import HomeAssistantError, NoEntitySpecifiedError
 from homeassistant.loader import bind_hass
 from homeassistant.util import dt as dt_util, ensure_unique_string, slugify
 
-from . import entity_registry as er
+from . import device_registry as dr, entity_registry as er
 from .device_registry import DeviceEntryType
 from .entity_platform import EntityPlatform
 from .event import async_track_entity_registry_updated_event
@@ -144,7 +144,7 @@ def get_supported_features(hass: HomeAssistant, entity_id: str) -> int:
 
 
 def get_unit_of_measurement(hass: HomeAssistant, entity_id: str) -> str | None:
-    """Get unit of measurement class of an entity.
+    """Get unit of measurement of an entity.
 
     First try the statemachine, then entity registry.
     """
@@ -221,7 +221,9 @@ class EntityDescription:
     entity_registry_visible_default: bool = True
     force_update: bool = False
     icon: str | None = None
+    has_entity_name: bool = False
     name: str | None = None
+    translation_key: str | None = None
     unit_of_measurement: str | None = None
 
 
@@ -273,10 +275,12 @@ class Entity(ABC):
     _attr_assumed_state: bool = False
     _attr_attribution: str | None = None
     _attr_available: bool = True
+    _attr_capability_attributes: Mapping[str, Any] | None = None
     _attr_context_recent_time: timedelta = timedelta(seconds=5)
     _attr_device_class: str | None
     _attr_device_info: DeviceInfo | None = None
     _attr_entity_category: EntityCategory | None
+    _attr_has_entity_name: bool
     _attr_entity_picture: str | None = None
     _attr_entity_registry_enabled_default: bool
     _attr_entity_registry_visible_default: bool
@@ -287,6 +291,7 @@ class Entity(ABC):
     _attr_should_poll: bool = True
     _attr_state: StateType = STATE_UNKNOWN
     _attr_supported_features: int | None = None
+    _attr_translation_key: str | None
     _attr_unique_id: str | None = None
     _attr_unit_of_measurement: str | None
 
@@ -302,6 +307,15 @@ class Entity(ABC):
     def unique_id(self) -> str | None:
         """Return a unique ID."""
         return self._attr_unique_id
+
+    @property
+    def has_entity_name(self) -> bool:
+        """Return if the name of the entity is describing only the entity itself."""
+        if hasattr(self, "_attr_has_entity_name"):
+            return self._attr_has_entity_name
+        if hasattr(self, "entity_description"):
+            return self.entity_description.has_entity_name
+        return False
 
     @property
     def name(self) -> str | None:
@@ -325,6 +339,18 @@ class Entity(ABC):
 
         Implemented by component base class. Convention for attribute names
         is lowercase snake_case.
+        """
+        return self._attr_capability_attributes
+
+    def get_initial_entity_options(self) -> er.EntityOptionsType | None:
+        """Return initial entity options.
+
+        These will be stored in the entity registry the first time the entity is seen,
+        and then never updated.
+
+        Implemented by component base class, should not be extended by integrations.
+
+        Note: Not a property to avoid calculating unless needed.
         """
         return None
 
@@ -462,6 +488,15 @@ class Entity(ABC):
             return self.entity_description.entity_category
         return None
 
+    @property
+    def translation_key(self) -> str | None:
+        """Return the translation key to translate the entity's states."""
+        if hasattr(self, "_attr_translation_key"):
+            return self._attr_translation_key
+        if hasattr(self, "entity_description"):
+            return self.entity_description.translation_key
+        return None
+
     # DO NOT OVERWRITE
     # These properties and methods are either managed by Home Assistant or they
     # are used to perform a very specific function. Overwriting these may
@@ -544,7 +579,10 @@ class Entity(ABC):
                 self._disabled_reported = True
                 assert self.platform is not None
                 _LOGGER.warning(
-                    "Entity %s is incorrectly being triggered for updates while it is disabled. This is a bug in the %s integration",
+                    (
+                        "Entity %s is incorrectly being triggered for updates while it"
+                        " is disabled. This is a bug in the %s integration"
+                    ),
                     self.entity_id,
                     self.platform.platform_name,
                 )
@@ -583,7 +621,26 @@ class Entity(ABC):
         if (icon := (entry and entry.icon) or self.icon) is not None:
             attr[ATTR_ICON] = icon
 
-        if (name := (entry and entry.name) or self.name) is not None:
+        def friendly_name() -> str | None:
+            """Return the friendly name.
+
+            If has_entity_name is False, this returns self.name
+            If has_entity_name is True, this returns device.name + self.name
+            """
+            if not self.has_entity_name or not self.registry_entry:
+                return self.name
+
+            device_registry = dr.async_get(self.hass)
+            if not (device_id := self.registry_entry.device_id) or not (
+                device_entry := device_registry.async_get(device_id)
+            ):
+                return self.name
+
+            if not self.name:
+                return device_entry.name_by_user or device_entry.name
+            return f"{device_entry.name_by_user or device_entry.name} {self.name}"
+
+        if (name := (entry and entry.name) or friendly_name()) is not None:
             attr[ATTR_FRIENDLY_NAME] = name
 
         if (supported_features := self.supported_features) is not None:
@@ -662,9 +719,9 @@ class Entity(ABC):
         try:
             task: asyncio.Future[None]
             if hasattr(self, "async_update"):
-                task = self.hass.async_create_task(self.async_update())  # type: ignore[attr-defined]
+                task = self.hass.async_create_task(self.async_update())
             elif hasattr(self, "update"):
-                task = self.hass.async_add_executor_job(self.update)  # type: ignore[attr-defined]
+                task = self.hass.async_add_executor_job(self.update)
             else:
                 return
 
@@ -713,7 +770,8 @@ class Entity(ABC):
         """Start adding an entity to a platform."""
         if self._platform_state == EntityPlatformState.ADDED:
             raise HomeAssistantError(
-                f"Entity {self.entity_id} cannot be added a second time to an entity platform"
+                f"Entity {self.entity_id} cannot be added a second time to an entity"
+                " platform"
             )
 
         self.hass = hass
@@ -906,7 +964,7 @@ class Entity(ABC):
         """Suggest to report an issue."""
         report_issue = ""
         if "custom_components" in type(self).__module__:
-            report_issue = "report it to the custom component author."
+            report_issue = "report it to the custom integration author."
         else:
             report_issue = (
                 "create a bug report at "

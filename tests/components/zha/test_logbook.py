@@ -33,7 +33,7 @@ DOWN = "down"
 
 @pytest.fixture(autouse=True)
 def sensor_platform_only():
-    """Only setup the sensor and required base platforms to speed up tests."""
+    """Only set up the sensor and required base platforms to speed up tests."""
     with patch("homeassistant.components.zha.PLATFORMS", (Platform.SENSOR,)):
         yield
 
@@ -60,7 +60,7 @@ async def mock_devices(hass, zigpy_device_mock, zha_device_joined):
 
 
 async def test_zha_logbook_event_device_with_triggers(hass, mock_devices):
-    """Test zha logbook events with device and triggers."""
+    """Test ZHA logbook events with device and triggers."""
 
     zigpy_device, zha_device = mock_devices
 
@@ -145,7 +145,7 @@ async def test_zha_logbook_event_device_with_triggers(hass, mock_devices):
 
 
 async def test_zha_logbook_event_device_no_triggers(hass, mock_devices):
-    """Test zha logbook events with device and without triggers."""
+    """Test ZHA logbook events with device and without triggers."""
 
     zigpy_device, zha_device = mock_devices
     ieee_address = str(zha_device.ieee)
@@ -172,6 +172,40 @@ async def test_zha_logbook_event_device_no_triggers(hass, mock_devices):
                     },
                 },
             ),
+            MockRow(
+                ZHA_EVENT,
+                {
+                    CONF_DEVICE_ID: reg_device.id,
+                    "device_ieee": str(ieee_address),
+                    CONF_UNIQUE_ID: f"{str(ieee_address)}:1:0x0006",
+                    "endpoint_id": 1,
+                    "cluster_id": 6,
+                    "params": {
+                        "test": "test",
+                    },
+                },
+            ),
+            MockRow(
+                ZHA_EVENT,
+                {
+                    CONF_DEVICE_ID: reg_device.id,
+                    "device_ieee": str(ieee_address),
+                    CONF_UNIQUE_ID: f"{str(ieee_address)}:1:0x0006",
+                    "endpoint_id": 1,
+                    "cluster_id": 6,
+                    "params": {},
+                },
+            ),
+            MockRow(
+                ZHA_EVENT,
+                {
+                    CONF_DEVICE_ID: reg_device.id,
+                    "device_ieee": str(ieee_address),
+                    CONF_UNIQUE_ID: f"{str(ieee_address)}:1:0x0006",
+                    "endpoint_id": 1,
+                    "cluster_id": 6,
+                },
+            ),
         ],
     )
 
@@ -182,9 +216,23 @@ async def test_zha_logbook_event_device_no_triggers(hass, mock_devices):
         == "Shake event was fired with parameters: {'test': 'test'}"
     )
 
+    assert events[1]["name"] == "FakeManufacturer FakeModel"
+    assert events[1]["domain"] == "zha"
+    assert (
+        events[1]["message"] == "Zha Event was fired with parameters: {'test': 'test'}"
+    )
+
+    assert events[2]["name"] == "FakeManufacturer FakeModel"
+    assert events[2]["domain"] == "zha"
+    assert events[2]["message"] == "Zha Event was fired"
+
+    assert events[3]["name"] == "FakeManufacturer FakeModel"
+    assert events[3]["domain"] == "zha"
+    assert events[3]["message"] == "Zha Event was fired"
+
 
 async def test_zha_logbook_event_device_no_device(hass, mock_devices):
-    """Test zha logbook events without device and without triggers."""
+    """Test ZHA logbook events without device and without triggers."""
 
     hass.config.components.add("recorder")
     assert await async_setup_component(hass, "logbook", {})

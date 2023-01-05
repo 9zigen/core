@@ -8,11 +8,7 @@ from homeassistant import config_entries
 from homeassistant.components import zeroconf
 from homeassistant.components.homewizard.const import DOMAIN
 from homeassistant.const import CONF_IP_ADDRESS
-from homeassistant.data_entry_flow import (
-    RESULT_TYPE_ABORT,
-    RESULT_TYPE_CREATE_ENTRY,
-    RESULT_TYPE_FORM,
-)
+from homeassistant.data_entry_flow import FlowResultType
 
 from .generator import get_mock_device
 
@@ -50,8 +46,7 @@ async def test_manual_flow_works(hass, aioclient_mock):
 
     assert len(hass.config_entries.async_entries(DOMAIN)) == 1
 
-    assert len(device.device.mock_calls) == 1
-    assert len(device.close.mock_calls) == 1
+    assert len(device.close.mock_calls) == len(device.device.mock_calls)
 
     assert len(mock_setup_entry.mock_calls) == 1
 
@@ -95,7 +90,7 @@ async def test_discovery_flow_works(hass, aioclient_mock):
         result = await hass.config_entries.flow.async_configure(
             flow["flow_id"], user_input=None
         )
-    assert result["type"] == RESULT_TYPE_FORM
+    assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "discovery_confirm"
 
     with patch(
@@ -109,7 +104,7 @@ async def test_discovery_flow_works(hass, aioclient_mock):
             flow["flow_id"], user_input={"ip_address": "192.168.43.183"}
         )
 
-    assert result["type"] == RESULT_TYPE_CREATE_ENTRY
+    assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["title"] == "P1 meter (aabbccddeeff)"
     assert result["data"][CONF_IP_ADDRESS] == "192.168.43.183"
 
@@ -146,8 +141,7 @@ async def test_config_flow_imports_entry(aioclient_mock, hass):
     assert result["data"][CONF_IP_ADDRESS] == "1.2.3.4"
 
     assert len(hass.config_entries.async_entries(DOMAIN)) == 1
-    assert len(device.device.mock_calls) == 1
-    assert len(device.close.mock_calls) == 1
+    assert len(device.device.mock_calls) == len(device.close.mock_calls)
     assert len(mock_setup_entry.mock_calls) == 1
 
 
@@ -176,21 +170,27 @@ async def test_discovery_disabled_api(hass, aioclient_mock):
         data=service_info,
     )
 
-    assert result["type"] == RESULT_TYPE_FORM
+    assert result["type"] == FlowResultType.FORM
+
+    def mock_initialize():
+        raise DisabledError
+
+    device = get_mock_device()
+    device.device.side_effect = mock_initialize
 
     with patch(
         "homeassistant.components.homewizard.async_setup_entry",
         return_value=True,
     ), patch(
         "homeassistant.components.homewizard.config_flow.HomeWizardEnergy",
-        return_value=get_mock_device(),
+        return_value=device,
     ):
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], user_input={"ip_address": "192.168.43.183"}
         )
 
-    assert result["type"] == RESULT_TYPE_ABORT
-    assert result["reason"] == "api_not_enabled"
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {"base": "api_not_enabled"}
 
 
 async def test_discovery_missing_data_in_service_info(hass, aioclient_mock):
@@ -218,7 +218,7 @@ async def test_discovery_missing_data_in_service_info(hass, aioclient_mock):
         data=service_info,
     )
 
-    assert result["type"] == RESULT_TYPE_ABORT
+    assert result["type"] == FlowResultType.ABORT
     assert result["reason"] == "invalid_discovery_parameters"
 
 
@@ -247,7 +247,7 @@ async def test_discovery_invalid_api(hass, aioclient_mock):
         data=service_info,
     )
 
-    assert result["type"] == RESULT_TYPE_ABORT
+    assert result["type"] == FlowResultType.ABORT
     assert result["reason"] == "unsupported_api_version"
 
 
@@ -275,8 +275,8 @@ async def test_check_disabled_api(hass, aioclient_mock):
             result["flow_id"], {CONF_IP_ADDRESS: "2.2.2.2"}
         )
 
-    assert result["type"] == RESULT_TYPE_ABORT
-    assert result["reason"] == "api_not_enabled"
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {"base": "api_not_enabled"}
 
 
 async def test_check_error_handling_api(hass, aioclient_mock):
@@ -303,7 +303,7 @@ async def test_check_error_handling_api(hass, aioclient_mock):
             result["flow_id"], {CONF_IP_ADDRESS: "2.2.2.2"}
         )
 
-    assert result["type"] == RESULT_TYPE_ABORT
+    assert result["type"] == FlowResultType.ABORT
     assert result["reason"] == "unknown_error"
 
 
@@ -331,7 +331,7 @@ async def test_check_detects_invalid_api(hass, aioclient_mock):
             result["flow_id"], {CONF_IP_ADDRESS: "2.2.2.2"}
         )
 
-    assert result["type"] == RESULT_TYPE_ABORT
+    assert result["type"] == FlowResultType.ABORT
     assert result["reason"] == "unsupported_api_version"
 
 
@@ -359,5 +359,74 @@ async def test_check_requesterror(hass, aioclient_mock):
             result["flow_id"], {CONF_IP_ADDRESS: "2.2.2.2"}
         )
 
-    assert result["type"] == RESULT_TYPE_ABORT
-    assert result["reason"] == "unknown_error"
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {"base": "network_error"}
+
+
+async def test_reauth_flow(hass, aioclient_mock):
+    """Test reauth flow while API is enabled."""
+
+    mock_entry = MockConfigEntry(
+        domain="homewizard_energy", data={CONF_IP_ADDRESS: "1.2.3.4"}
+    )
+
+    mock_entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={
+            "source": config_entries.SOURCE_REAUTH,
+            "entry_id": mock_entry.entry_id,
+        },
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "reauth_confirm"
+
+    device = get_mock_device()
+    with patch(
+        "homeassistant.components.homewizard.async_setup_entry",
+        return_value=True,
+    ), patch(
+        "homeassistant.components.homewizard.config_flow.HomeWizardEnergy",
+        return_value=device,
+    ):
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+        assert result["type"] == FlowResultType.ABORT
+        assert result["reason"] == "reauth_successful"
+
+
+async def test_reauth_error(hass, aioclient_mock):
+    """Test reauth flow while API is still disabled."""
+
+    def mock_initialize():
+        raise DisabledError()
+
+    mock_entry = MockConfigEntry(
+        domain="homewizard_energy", data={CONF_IP_ADDRESS: "1.2.3.4"}
+    )
+
+    mock_entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={
+            "source": config_entries.SOURCE_REAUTH,
+            "entry_id": mock_entry.entry_id,
+        },
+    )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "reauth_confirm"
+
+    device = get_mock_device()
+    device.device.side_effect = mock_initialize
+    with patch(
+        "homeassistant.components.homewizard.config_flow.HomeWizardEnergy",
+        return_value=device,
+    ):
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+        assert result["type"] == FlowResultType.FORM
+        assert result["errors"] == {"base": "api_not_enabled"}
